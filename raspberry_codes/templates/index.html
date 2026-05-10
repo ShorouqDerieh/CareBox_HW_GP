@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>CareBox+ Control</title>
+  <style>
+    body {
+      font-family: Arial;
+      max-width: 1100px;
+      margin: 30px auto;
+      background: #f7f9fc;
+    }
+
+    h1 {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+
+    .box {
+      background: white;
+      border: 1px solid #ddd;
+      padding: 20px;
+      margin-bottom: 20px;
+      border-radius: 12px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+    }
+
+    button {
+      padding: 8px 14px;
+      margin: 5px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      background: #007bff;
+      color: white;
+      font-weight: bold;
+    }
+
+    button:hover { background: #0056b3; }
+
+    .danger { background: #dc3545; }
+    .danger:hover { background: #a71d2a; }
+
+    .success { background: #28a745; }
+    .warning { background: #f39c12; }
+
+    input {
+      padding: 8px;
+      margin: 5px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      width: 120px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 9px;
+      text-align: center;
+    }
+
+    th { background: #f1f1f1; }
+
+    .planned { color: #555; font-weight: bold; }
+    .loaded { color: green; font-weight: bold; }
+    .skipped { color: orange; font-weight: bold; }
+    .taken { color: green; font-weight: bold; }
+    .missed { color: red; font-weight: bold; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    .status {
+      font-weight: bold;
+      color: darkblue;
+    }
+  </style>
+</head>
+
+<body>
+
+<h1>CareBox+ Control Panel</h1>
+
+<div class="grid">
+  <div class="box">
+    <h2>Device Status</h2>
+    <p><b>Tray Status:</b> {{ tray_status }}</p>
+    <p><b>Security Status:</b> {{ security_status }}</p>
+  </div>
+
+  <div class="box">
+    <h2>Manual Test</h2>
+    <form action="/test" method="post" style="display:inline;">
+      <button>Test Dispense</button>
+    </form>
+
+    <form action="/unlock" method="post" style="display:inline;">
+      <button class="success">Unlock Lid</button>
+    </form>
+
+    <form action="/lock" method="post" style="display:inline;">
+      <button class="danger">Lock Lid</button>
+    </form>
+
+    <form action="/move_slot" method="post">
+      <input type="number" name="slot" min="1" max="20" placeholder="Slot 1-20" required>
+      <button>Move Slot</button>
+    </form>
+  </div>
+</div>
+
+<div class="box">
+  <h2>Add Planned Dose</h2>
+
+  <form action="/add" method="post">
+    <input type="number" name="slot" min="1" max="20" placeholder="Slot" required>
+    <input type="text" name="medicine" placeholder="Medicine" required>
+    <input type="text" name="dose" placeholder="Dose" required>
+    <input type="number" name="hour" min="0" max="23" placeholder="Hour" required>
+    <input type="number" name="minute" min="0" max="59" placeholder="Minute" required>
+    <button type="submit">Add Plan</button>
+  </form>
+</div>
+
+<div class="box">
+  <h2>Refill Flow</h2>
+
+  <p><b>Message:</b> {{ refill.message }}</p>
+  <p><b>Active:</b> {{ refill.active }}</p>
+  <p><b>Authorized:</b> {{ refill.authorized }}</p>
+  <p><b>QR Verified:</b> {{ refill.qr_verified }}</p>
+
+  {% if refill.current_item %}
+    <hr>
+    <h3>Current Refill Item</h3>
+    <p><b>Slot:</b> {{ refill.current_item.slot }}</p>
+    <p><b>Medicine:</b> {{ refill.current_item.medicine }}</p>
+    <p><b>Dose:</b> {{ refill.current_item.dose }}</p>
+    <p><b>Time:</b> {{ "%02d"|format(refill.current_item.hour) }}:{{ "%02d"|format(refill.current_item.minute) }}</p>
+  {% else %}
+    <p><b>No current refill item</b></p>
+  {% endif %}
+
+  {% if refill.last_qr %}
+    <hr>
+    <h3>Last QR</h3>
+    <pre>{{ refill.last_qr }}</pre>
+  {% endif %}
+
+  <form action="/refill/start" method="post" style="display:inline;">
+    <button class="success">Start Refill</button>
+  </form>
+
+  <form action="/refill/scan" method="post" style="display:inline;">
+    <button>Scan QR</button>
+  </form>
+
+  <form action="/refill/confirm" method="post" style="display:inline;">
+    <button class="success">Confirm Loaded</button>
+  </form>
+
+  <form action="/refill/skip" method="post" style="display:inline;">
+    <button class="warning">Skip Current</button>
+  </form>
+
+  <form action="/refill/finish" method="post" style="display:inline;">
+    <button class="success">Finish Refill</button>
+  </form>
+
+  <form action="/refill/cancel" method="post" style="display:inline;">
+    <button class="danger">Cancel</button>
+  </form>
+</div>
+
+<div class="box">
+  <h2>Medication Plan / Schedule</h2>
+
+  <table>
+    <tr>
+      <th>Slot</th>
+      <th>Medicine</th>
+      <th>Dose</th>
+      <th>Time</th>
+      <th>Status</th>
+      <th>QR</th>
+      <th>Action</th>
+    </tr>
+
+    {% for s in schedules %}
+    <tr>
+      <td>{{ s.slot }}</td>
+      <td>{{ s.medicine }}</td>
+      <td>{{ s.dose }}</td>
+      <td>{{ "%02d"|format(s.hour) }}:{{ "%02d"|format(s.minute) }}</td>
+      <td class="{{ s.status }}">{{ s.status }}</td>
+      <td>{{ s.verified_by_qr }}</td>
+      <td>
+        <form action="/delete/{{ loop.index0 }}" method="post">
+          <button class="danger">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="7">No schedules yet</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <br>
+
+  <form action="/sync" method="post" style="display:inline;">
+    <button>Sync Loaded Only</button>
+  </form>
+
+  <form action="/clear" method="post" style="display:inline;">
+    <button class="danger">Clear All</button>
+  </form>
+</div>
+
+<div class="grid">
+  <div class="box">
+    <h2>Tray History</h2>
+    <ul>
+      {% for line in tray_history %}
+        <li>{{ line }}</li>
+      {% else %}
+        <li>No tray messages</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <div class="box">
+    <h2>Security History</h2>
+    <ul>
+      {% for line in security_history %}
+        <li>{{ line }}</li>
+      {% else %}
+        <li>No security messages</li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+
+</body>
+</html>
