@@ -4,6 +4,9 @@
 #include <hd44780.h>
 #include <hd44780ioClass/hd44780_I2Cexp.h>
 #include <Servo.h>
+#include <I2CKeyPad.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -15,6 +18,7 @@
 #define HOME_IR_PIN 7
 #define TAKE_IR_PIN 8
 #define ENABLE_PIN 5
+
 #define BACKWARD HIGH
 #define FORWARD  LOW
 
@@ -22,22 +26,61 @@
 #define MAX_SLOTS 20
 #define SERVO_PIN 9
 
+// ============================
+// Health Sensors
+// ============================
+// DS18B20 data pin
+#define TEMP_PIN 2
+
+// Pulse sensor signal pin
+#define PULSE_PIN A1
+
+#define PULSE_READ_TIME 5000
+#define PULSE_DIFF_THRESHOLD 6
+#define PULSE_MIN_AVG 20
+
 Servo doorServo;
+
 #define DOOR_CLOSED 140
 #define DOOR_OPEN   40
 
-// ============================.ad
+// ============================
 // Modes
 // ============================
 #define MODE_PRIMARY 1
 #define MODE_BACKUP  2
 
 RTC_DS3231 rtc;
-//hd44780_I2Cexp lcd;
 hd44780_I2Cexp lcd(0x27);
+
+// ============================
+// Health objects
+// ============================
+OneWire oneWire(TEMP_PIN);
+DallasTemperature tempSensor(&oneWire);
+
+// ============================
+// Keypad
+// ============================
+#define KEYPAD_ADDR 0x20
+
+I2CKeyPad keyPad(KEYPAD_ADDR);
+
+bool keypadReady = false;
+unsigned long lastKeypadTime = 0;
+
+// إذا الأزرار طالعة غلط، غيري هذا السطر فقط.
+char keypadMap[17] = "D#0*C987B654A321";
+
+// لو الترتيب العادي زبط معك استخدمي بدل السطر فوق:
+// char keypadMap[17] = "123A456B789C*0#D";
+
+// ============================
+// State
+// ============================
 int currentMode = MODE_PRIMARY;
 unsigned long lastHeartbeat = 0;
-const unsigned long HEARTBEAT_TIMEOUT = 30000; // 30 sec
+const unsigned long HEARTBEAT_TIMEOUT = 30000;
 
 int stepDelay = 600;
 int currentSlot = 0;
@@ -58,7 +101,7 @@ const int EEPROM_DATA_ADDR = 2;
 // LCD state
 unsigned long lastLcdUpdate = 0;
 
-// Serial buffer without String to avoid RAM fragmentation
+// Serial buffer without String
 char serialBuffer[40];
 byte serialIndex = 0;
 
@@ -78,13 +121,21 @@ void executeMoveOnly(int targetSlot);
 void runBackupScheduleCheck();
 bool findNextDose(int &nextHour, int &nextMinute);
 
+void initKeypad();
+void checkKeypad();
+void handleKeypadKey(char key);
+
+void initHealthSensors();
+void runHealthCheck();
+
 // ============================
-// LCD helpers - no String
+// LCD helpers
 // ============================
 void printLineChar(uint8_t row, const char *text) {
   lcd.setCursor(0, row);
 
   byte len = strlen(text);
+
   for (byte i = 0; i < 16; i++) {
     if (i < len) lcd.print(text[i]);
     else lcd.print(' ');
@@ -109,33 +160,231 @@ void showHomingScreen() {
 void showDispensingScreen() {
   DateTime now = rtc.now();
   char line1[17];
+
   snprintf(line1, sizeof(line1), "Time: %02d:%02d", now.hour(), now.minute());
-  showScreen(line1, "Dispensing dose", "Rotating tray...", "Please wait");
+
+  showScreen(
+    line1,
+    "Dispensing dose",
+    "Rotating tray...",
+    "Please wait"
+  );
 }
 
 void showWaitingTakeScreen() {
   DateTime now = rtc.now();
   char line1[17];
+
   snprintf(line1, sizeof(line1), "Time: %02d:%02d", now.hour(), now.minute());
-  showScreen(line1, "Medicine ready", "Take your pill", "Sensor waiting");
+
+  showScreen(
+    line1,
+    "Medicine ready",
+    "Take your pill",
+    "Sensor waiting"
+  );
 }
 
 void showTakenScreen() {
   DateTime now = rtc.now();
   char line1[17];
+
   snprintf(line1, sizeof(line1), "Time: %02d:%02d", now.hour(), now.minute());
-  showScreen(line1, "Dose taken", "Confirmed by IR", "Thank you");
+
+  showScreen(
+    line1,
+    "Dose taken",
+    "Confirmed by IR",
+    "Thank you"
+  );
 }
 
 void showMissedScreen() {
   DateTime now = rtc.now();
   char line1[17];
+
   snprintf(line1, sizeof(line1), "Time: %02d:%02d", now.hour(), now.minute());
-  showScreen(line1, "Dose missed", "No hand detect", "Check patient");
+
+  showScreen(
+    line1,
+    "Dose missed",
+    "No hand detect",
+    "Check patient"
+  );
 }
 
 void showRtcErrorScreen() {
   showScreen("System error", "RTC not found", "Check wiring", "Restart device");
+}
+
+// ============================
+// Health functions
+// ============================
+void initHealthSensors() {
+  pinMode(PULSE_PIN, INPUT);
+  tempSensor.begin();
+
+  Serial.println(F("HEALTH_READY"));
+}
+
+void runHealthCheck() {
+  showScreen(
+    "Health Check",
+    "Place finger",
+    "Reading...",
+    "Please wait"
+  );
+
+  // Read temperature
+  tempSensor.requestTemperatures();
+  float tempC = tempSensor.getTempCByIndex(0);
+
+  // Read pulse signal for 5 seconds
+  unsigned long start = millis();
+
+  int minVal = 1023;
+  int maxVal = 0;
+  long sum = 0;
+  int count = 0;
+
+  while (millis() - start < PULSE_READ_TIME) {
+    int value = analogRead(PULSE_PIN);
+
+    if (value < minVal) minVal = value;
+    if (value > maxVal) maxVal = value;
+
+    sum += value;
+    count++;
+
+    delay(10);
+  }
+
+  int avg = 0;
+  if (count > 0) {
+    avg = sum / count;
+  }
+
+  int diff = maxVal - minVal;
+
+  const char *pulseStatus;
+
+  if (avg >= PULSE_MIN_AVG && diff >= PULSE_DIFF_THRESHOLD) {
+    pulseStatus = "DETECTED";
+  } else {
+    pulseStatus = "WEAK";
+  }
+
+  const char *healthStatus = "NORMAL";
+
+  if (tempC == DEVICE_DISCONNECTED_C || tempC < -100) {
+    healthStatus = "TEMP ERROR";
+  } else if (tempC >= 38.0) {
+    healthStatus = "ALERT";
+  }
+
+  char tempStr[8];
+  char line1[17];
+  char line2[17];
+  char line3[17];
+
+  if (tempC == DEVICE_DISCONNECTED_C || tempC < -100) {
+    snprintf(line1, sizeof(line1), "Temp: ERROR");
+  } else {
+    dtostrf(tempC, 4, 1, tempStr);
+    snprintf(line1, sizeof(line1), "Temp:%s C", tempStr);
+  }
+
+  snprintf(line2, sizeof(line2), "Pulse:%s", pulseStatus);
+  snprintf(line3, sizeof(line3), "Status:%s", healthStatus);
+
+  showScreen(
+    "Health Result",
+    line1,
+    line2,
+    line3
+  );
+
+  Serial.print(F("HEALTH TEMP="));
+
+  if (tempC == DEVICE_DISCONNECTED_C || tempC < -100) {
+    Serial.print(F("ERROR"));
+  } else {
+    Serial.print(tempC, 1);
+  }
+
+  Serial.print(F(" PULSE_AVG="));
+  Serial.print(avg);
+
+  Serial.print(F(" PULSE_DIFF="));
+  Serial.print(diff);
+
+  Serial.print(F(" PULSE_STATUS="));
+  Serial.print(pulseStatus);
+
+  Serial.print(F(" STATUS="));
+  Serial.println(healthStatus);
+
+  delay(3000);
+}
+
+// ============================
+// Keypad functions
+// ============================
+void initKeypad() {
+  if (keyPad.begin()) {
+    keypadReady = true;
+    Serial.println(F("KEYPAD_READY"));
+  } else {
+    keypadReady = false;
+    Serial.println(F("KEYPAD_ERROR"));
+  }
+}
+
+void handleKeypadKey(char key) {
+  Serial.print(F("KEY_"));
+  Serial.println(key);
+
+  if (key == 'A') {
+    Serial.println(F("KEY_START_REFILL"));
+  }
+  else if (key == '#') {
+    Serial.println(F("KEY_CONFIRM_LOADED"));
+  }
+  else if (key == 'B') {
+    Serial.println(F("KEY_SKIP_SLOT"));
+  }
+  else if (key == 'D') {
+    Serial.println(F("KEY_FINISH_REFILL"));
+  }
+  else if (key == 'C') {
+    Serial.println(F("KEY_HEALTH_CHECK"));
+    runHealthCheck();
+  }
+  else if (key == '*') {
+    Serial.println(F("KEY_SCAN_QR"));
+  }
+}
+
+void checkKeypad() {
+  if (!keypadReady) return;
+
+  uint8_t index = keyPad.getKey();
+
+  if (index < 16) {
+    if (millis() - lastKeypadTime < 300) {
+      return;
+    }
+
+    char key = keypadMap[index];
+
+    handleKeypadKey(key);
+
+    lastKeypadTime = millis();
+
+    while (keyPad.getKey() < 16) {
+      delay(20);
+    }
+  }
 }
 
 // ============================
@@ -161,6 +410,7 @@ void loadSchedulesFromEEPROM() {
   }
 
   scheduleCount = EEPROM.read(EEPROM_COUNT_ADDR);
+
   if (scheduleCount < 0 || scheduleCount > MAX_SLOTS) {
     scheduleCount = 0;
     return;
@@ -276,6 +526,7 @@ void openDoor() {
 // ============================
 void goToHome() {
   closeDoor();
+
   Serial.println(F("HOMING_START"));
   showHomingScreen();
 
@@ -332,7 +583,6 @@ void moveToSlot(int targetSlot) {
 
 // ============================
 // Hand detection
-// If sensor reversed, change LOW to HIGH
 // ============================
 bool isHandDetected() {
   return digitalRead(TAKE_IR_PIN) == LOW;
@@ -343,11 +593,13 @@ bool isHandDetected() {
 // ============================
 bool waitForHandToTakePill(unsigned long timeout = 60000) {
   unsigned long start = millis();
+
   showWaitingTakeScreen();
 
   while (millis() - start < timeout) {
     if (isHandDetected()) {
       delay(300);
+
       if (isHandDetected()) {
         Serial.println(F("TAKEN"));
         showTakenScreen();
@@ -355,6 +607,7 @@ bool waitForHandToTakePill(unsigned long timeout = 60000) {
         return true;
       }
     }
+
     delay(50);
   }
 
@@ -461,19 +714,19 @@ void runBackupScheduleCheck() {
 }
 
 // ============================
-// Small trim helper for char buffer
+// Trim serial command
 // ============================
 void trimCommand(char *cmd) {
-  // Remove leading spaces
   char *start = cmd;
+
   while (*start == ' ' || *start == '\t') start++;
 
   if (start != cmd) {
     memmove(cmd, start, strlen(start) + 1);
   }
 
-  // Remove trailing spaces
   int len = strlen(cmd);
+
   while (len > 0 && (cmd[len - 1] == ' ' || cmd[len - 1] == '\t')) {
     cmd[len - 1] = '\0';
     len--;
@@ -481,7 +734,7 @@ void trimCommand(char *cmd) {
 }
 
 // ============================
-// Command parser - no String
+// Serial command parser
 // ============================
 void handleSerialCommand(char *cmd) {
   trimCommand(cmd);
@@ -505,6 +758,11 @@ void handleSerialCommand(char *cmd) {
     Serial.print(currentSlot);
     Serial.print(F(" COUNT "));
     Serial.println(scheduleCount);
+    return;
+  }
+
+  if (strcmp(cmd, "HEALTH_CHECK") == 0) {
+    runHealthCheck();
     return;
   }
 
@@ -562,6 +820,7 @@ void handleSerialCommand(char *cmd) {
     } else {
       Serial.println(F("ERROR: Bad ADD format"));
     }
+
     return;
   }
 
@@ -573,6 +832,7 @@ void handleSerialCommand(char *cmd) {
     } else {
       Serial.println(F("ERROR: Invalid slot"));
     }
+
     return;
   }
 
@@ -584,6 +844,7 @@ void handleSerialCommand(char *cmd) {
     } else {
       Serial.println(F("ERROR: Invalid slot"));
     }
+
     return;
   }
 
@@ -592,7 +853,7 @@ void handleSerialCommand(char *cmd) {
 }
 
 // ============================
-// Non-blocking serial line reader - no String
+// Serial line reader
 // ============================
 void readSerialLines() {
   while (Serial.available() > 0) {
@@ -606,7 +867,8 @@ void readSerialLines() {
       }
 
       serialIndex = 0;
-    } else if (c != '\r') {
+    }
+    else if (c != '\r') {
       if (serialIndex < sizeof(serialBuffer) - 1) {
         serialBuffer[serialIndex++] = c;
       } else {
@@ -621,22 +883,30 @@ void readSerialLines() {
 // Setup
 // ============================
 void setup() {
-   pinMode(ENABLE_PIN, OUTPUT);
-  digitalWrite(ENABLE_PIN, LOW); 
-   digitalWrite(STEP_PIN, LOW);
+  pinMode(ENABLE_PIN, OUTPUT);
+  digitalWrite(ENABLE_PIN, LOW);
+
+  digitalWrite(STEP_PIN, LOW);
   digitalWrite(DIR_PIN, BACKWARD);
+
   pinMode(STEP_PIN, OUTPUT);
   pinMode(DIR_PIN, OUTPUT);
   pinMode(HOME_IR_PIN, INPUT);
   pinMode(TAKE_IR_PIN, INPUT);
 
-
-
   Serial.begin(9600);
   delay(1000);
 
-  lcd.begin(16, 4);
+  int lcdStatus = lcd.begin(16, 4);
+
+  if (lcdStatus) {
+    Serial.print(F("LCD_ERROR "));
+    Serial.println(lcdStatus);
+    while (1);
+  }
+
   lcd.backlight();
+  lcd.clear();
   showStartupScreen();
 
   if (!rtc.begin()) {
@@ -645,20 +915,23 @@ void setup() {
     while (1);
   }
 
+  initHealthSensors();
+  initKeypad();
+
   doorServo.attach(SERVO_PIN);
   closeDoor();
 
   delay(300);
   doorServo.write(DOOR_CLOSED);
   delay(500);
-
-  // استخدمي هذا السطر مرة واحدة فقط لضبط الوقت، ثم رجعيه تعليق
-  //rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
 
   loadSchedulesFromEEPROM();
+
   goToHome();
 
   lastHeartbeat = millis();
+
   Serial.println(F("READY"));
 }
 
@@ -667,6 +940,8 @@ void setup() {
 // ============================
 void loop() {
   readSerialLines();
+
+  checkKeypad();
 
   if (millis() - lastHeartbeat > HEARTBEAT_TIMEOUT) {
     if (currentMode != MODE_BACKUP) {
@@ -680,5 +955,6 @@ void loop() {
   }
 
   updateIdleLCD();
+
   delay(50);
 }
