@@ -68,7 +68,7 @@ I2CKeyPad keyPad(KEYPAD_ADDR);
 bool keypadReady = false;
 unsigned long lastKeypadTime = 0;
 
-char keypadMap[17] = "D#0*C987B654A321";
+char keypadMap[17] = "147*2580369#ABCD";
 
 // ============================
 // Health Menu State
@@ -84,7 +84,7 @@ int currentMode = MODE_PRIMARY;
 unsigned long lastHeartbeat = 0;
 const unsigned long HEARTBEAT_TIMEOUT = 30000;
 
-int stepDelay = 900;
+int stepDelay =1800 ;
 int currentSlot = 0;
 int lastMoveHour = -1;
 int lastMoveMinute = -1;
@@ -102,9 +102,9 @@ const int  EEPROM_DATA_ADDR  = 2;
 
 // LCD state
 unsigned long lastLcdUpdate = 0;
-
+unsigned long lcdHoldUntil = 0;
 // Serial buffer
-char serialBuffer[20];
+char serialBuffer[64];
 byte serialIndex = 0;
 
 // ============================
@@ -138,6 +138,32 @@ void showHealthMenu();
 void processHealthMenuKey(char key);
 void measureTemperatureOnly();
 void measureHeartRateOnly();
+void holdLCD(unsigned long durationMs);
+void holdLCDLong();
+void releaseLCDHold();
+
+// LCD UI state screens
+void lcdSystemReadyScreen();
+void lcdPiOfflineScreen();
+void lcdRefillStartScreen();
+void lcdWaitRFIDScreen();
+void lcdRFIDOkScreen();
+void lcdRFIDDeniedScreen();
+void lcdMovingToFillSlot(int slot);
+void lcdFillSlotScreen(int slot);
+void lcdFillSlotMedicineScreen(int slot, const char *medicine);
+void lcdQRScanningScreen();
+void lcdQROkScreen();
+void lcdQRWrongScreen();
+void lcdQRRequiredScreen();
+void lcdSlotLoadedScreen();
+void lcdSlotSkippedScreen();
+void lcdRefillFinishScreen();
+void lcdRefillDoneScreen();
+void lcdSOSAlertScreen();
+void lcdSOSSentScreen();
+void lcdCameraErrorScreen();
+void lcdHomeErrorScreen();
 
 // ============================
 // LCD helpers
@@ -221,6 +247,24 @@ void showRtcErrorScreen() {
               F("Restart device"));
 }
 
+
+// ============================
+// LCD hold control
+// Keeps temporary state screens visible before returning to Idle.
+// ============================
+void holdLCD(unsigned long durationMs) {
+  lcdHoldUntil = millis() + durationMs;
+}
+
+void holdLCDLong() {
+  lcdHoldUntil = millis() + 60000UL;
+}
+
+void releaseLCDHold() {
+  lcdHoldUntil = 0;
+  lastLcdUpdate = 0;
+}
+
 // ============================
 // Dynamic screens (line1 = time from lcdBuf)
 // ============================
@@ -260,6 +304,162 @@ void showMissedScreen() {
                   F("Dose missed"),
                   F("No hand detect"),
                   F("Check patient"));
+}
+
+
+// ============================
+// CareBox+ LCD UI state screens
+// These screens can be called locally or by Raspberry Pi serial commands.
+// ============================
+void lcdSystemReadyScreen() {
+  showScreenF(F("CARE BOX+"),
+              F("System Ready"),
+              F("Waiting..."),
+              F("Caregiver mode"));
+}
+
+void lcdPiOfflineScreen() {
+  showScreenF(F("Pi Offline"),
+              F("Backup mode"),
+              F("RTC active"),
+              F("CareBox+"));
+}
+
+void lcdRefillStartScreen() {
+  showScreenF(F("Refill Mode"),
+              F("Preparing..."),
+              F("Please wait"),
+              F("Scan RFID"));
+}
+
+void lcdWaitRFIDScreen() {
+  showScreenF(F("RFID Required"),
+              F("Scan caregiver"),
+              F("card to open"),
+              F("the lid"));
+}
+
+void lcdRFIDOkScreen() {
+  showScreenF(F("RFID Accepted"),
+              F("Lid unlocked"),
+              F("Starting refill"),
+              F("Please wait"));
+}
+
+void lcdRFIDDeniedScreen() {
+  showScreenF(F("RFID Denied"),
+              F("Access rejected"),
+              F("Try again"),
+              F("or cancel"));
+}
+
+void lcdMovingToFillSlot(int slot) {
+  printLineF(0, F("Moving Tray"));
+  snprintf(lcdBuf, sizeof(lcdBuf), "To Slot:%2d", slot);
+  printLineChar(1, lcdBuf);
+  printLineF(2, F("Please wait"));
+  printLineF(3, F("Refill mode"));
+}
+
+void lcdFillSlotScreen(int slot) {
+  snprintf(lcdBuf, sizeof(lcdBuf), "Fill Slot %2d", slot);
+  printLineChar(0, lcdBuf);
+  printLineF(1, F("Place medicine"));
+  printLineF(2, F("Then scan QR"));
+  printLineF(3, F("Press *"));
+}
+void lcdFillSlotMedicineScreen(int slot, const char *medicine) {
+  snprintf(lcdBuf, sizeof(lcdBuf), "Fill Slot %2d", slot);
+  printLineChar(0, lcdBuf);
+
+  printLineChar(1, medicine);
+
+  printLineF(2, F("Scan QR"));
+  printLineF(3, F("Then press #"));
+}
+
+void lcdQRScanningScreen() {
+  showScreenF(F("QR Scanning"),
+              F("Show medicine"),
+              F("code to camera"),
+              F("Please wait"));
+}
+
+void lcdQROkScreen() {
+  showScreenF(F("QR Verified"),
+              F("Medicine OK"),
+              F("Press # to"),
+              F("confirm slot"));
+}
+
+void lcdQRWrongScreen() {
+  showScreenF(F("Wrong Medicine"),
+              F("Check medicine"),
+              F("Scan again"),
+              F("Press *"));
+}
+
+void lcdQRRequiredScreen() {
+  showScreenF(F("QR Required"),
+              F("Scan medicine"),
+              F("first"),
+              F("Press *"));
+}
+
+void lcdSlotLoadedScreen() {
+  showScreenF(F("Slot Loaded"),
+              F("Saved"),
+              F("Moving next"),
+              F("Please wait"));
+}
+
+void lcdSlotSkippedScreen() {
+  showScreenF(F("Slot Skipped"),
+              F("Moving to next"),
+              F("refill item"),
+              F("Please wait"));
+}
+
+void lcdRefillFinishScreen() {
+  showScreenF(F("Finishing"),
+              F("Locking lid"),
+              F("Sync schedules"),
+              F("Please wait"));
+}
+
+void lcdRefillDoneScreen() {
+  showScreenF(F("Refill Done"),
+              F("Loaded doses"),
+              F("synced"),
+              F("System Ready"));
+}
+
+void lcdSOSAlertScreen() {
+  showScreenF(F("SOS ALERT"),
+              F("Emergency"),
+              F("Calling"),
+              F("caregiver"));
+}
+
+void lcdSOSSentScreen() {
+  showScreenF(F("SOS Sent"),
+              F("Caregiver"),
+              F("notified"),
+              F("Stay calm"));
+}
+
+void lcdCameraErrorScreen() {
+  showScreenF(F("QR Error"),
+              F("Camera issue"),
+              F("Try again"),
+              F("or cancel"));
+}
+
+void lcdHomeErrorScreen() {
+  showScreenF(F("Tray Error"),
+              F("Home failed"),
+              F("Check sensor"),
+              F("Restart"));
 }
 
 // ============================
@@ -311,13 +511,51 @@ void processHealthMenuKey(char key) {
 }
 
 void measureTemperatureOnly() {
-  showScreenF(F("Temp Check"),
-              F("Reading..."),
-              F("Please wait"),
-              F(""));
+for (int sec = 3; sec > 0; sec--) {
+  printLineF(0, F("Temp Check"));
+  printLineF(1, F("Prepare sensor"));
+
+  snprintf(lcdBuf, sizeof(lcdBuf), "Reading in %d", sec);
+  printLineChar(2, lcdBuf);
+
+  printLineF(3, F("Please wait"));
+  delay(1000);
+}
+
+showScreenF(F("Temp Check"),
+            F("Reading..."),
+            F("Please wait"),
+            F(""));
+
+float sum = 0;
+int count = 0;
+
+for (int sec = 3; sec > 0; sec--) {
+  printLineF(0, F("Temp Check"));
+  printLineF(1, F("Measuring..."));
+
+  snprintf(lcdBuf, sizeof(lcdBuf), "Please wait %d", sec);
+  printLineChar(2, lcdBuf);
+
+  printLineF(3, F("Hold sensor"));
 
   tempSensor.requestTemperatures();
-  float tempC = tempSensor.getTempCByIndex(0);
+  float t = tempSensor.getTempCByIndex(0);
+
+  if (t != DEVICE_DISCONNECTED_C && t > -100) {
+    sum += t;
+    count++;
+  }
+
+  delay(1000);
+}
+
+float tempC;
+if (count > 0) {
+  tempC = sum / count;
+} else {
+  tempC = DEVICE_DISCONNECTED_C;
+}
 
   const char *status;
   if (tempC == DEVICE_DISCONNECTED_C || tempC < -100) {
@@ -347,14 +585,15 @@ void measureTemperatureOnly() {
   printLineChar(2, lcdBuf);
   printLineF(3, F("CareBox+"));
 
-  Serial.print(F("HEALTH TYPE=TEMP TEMP="));
-  if (tempC == DEVICE_DISCONNECTED_C || tempC < -100) {
-    Serial.print(F("ERROR"));
-  } else {
-    Serial.print(tempC, 1);
-  }
-  Serial.print(F(" STATUS="));
+if (tempC == DEVICE_DISCONNECTED_C || tempC < -100) {
+  Serial.println(F("HEALTH_TEMP_ERROR"));
+} else {
+  Serial.print(F("HEALTH_TEMP "));
+  Serial.println(tempC, 1);
+
+  Serial.print(F("HEALTH_TEMP_STATUS "));
   Serial.println(status);
+}
 
   delay(10000);
 }
@@ -456,14 +695,15 @@ void measureHeartRateOnly() {
     printLineF(3, F("Hold still"));
   }
 
-  Serial.print(F("HEALTH TYPE=HEART BPM="));
-  Serial.print(bpm > 0 ? bpm : 0);
-  Serial.print(F(" BEATS="));      Serial.print(beatCount);
-  Serial.print(F(" INTERVALS="));  Serial.print(intervalCount);
-  Serial.print(F(" RAW_MIN="));    Serial.print(rawMin);
-  Serial.print(F(" RAW_MAX="));    Serial.print(rawMax);
-  Serial.print(F(" THRESHOLD="));  Serial.print(threshold);
-  Serial.print(F(" STATUS="));     Serial.println(status);
+if (bpm > 0) {
+  Serial.print(F("HEALTH_HEART "));
+  Serial.println(bpm);
+
+  Serial.print(F("HEALTH_HEART_STATUS "));
+  Serial.println(status);
+} else {
+  Serial.println(F("HEALTH_HEART_ERROR"));
+}
 
   delay(10000);
 }
@@ -596,6 +836,10 @@ bool findNextDose(int &nextHour, int &nextMinute) {
 // ============================
 void updateIdleLCD() {
   if (healthMenuActive) return;
+
+  // لا ترجعي لشاشة الـ idle إذا في شاشة حالة معروضة
+  if (millis() < lcdHoldUntil) return;
+
   if (millis() - lastLcdUpdate < 1000) return;
   lastLcdUpdate = millis();
 
@@ -609,18 +853,17 @@ void updateIdleLCD() {
   // Line 1: mode
   printLineF(1, currentMode == MODE_PRIMARY ? F("Mode: PRIMARY") : F("Mode: BACKUP"));
 
-  // Line 2: count
-  snprintf(lcdBuf, sizeof(lcdBuf), "Count: %d", scheduleCount);
-  printLineChar(2, lcdBuf);
-
-  // Line 3: next dose
+  // Line 2: next dose
   int nh = -1, nm = -1;
   if (findNextDose(nh, nm)) {
-    snprintf(lcdBuf, sizeof(lcdBuf), "Next %02d:%02d", nh, nm);
+    snprintf(lcdBuf, sizeof(lcdBuf), "Next: %02d:%02d", nh, nm);
   } else {
-    snprintf(lcdBuf, sizeof(lcdBuf), "Next --:--");
+    snprintf(lcdBuf, sizeof(lcdBuf), "Next: --:--");
   }
-  printLineChar(3, lcdBuf);
+  printLineChar(2, lcdBuf);
+
+  // Line 3: status
+printLineF(3, F("Waiting dose"));
 }
 
 // ============================
@@ -769,19 +1012,22 @@ void listSchedules() {
 // Dose cycle
 // ============================
 void executeDoseCycle(int targetSlot) {
-  Serial.println(F("DISPENSE_START"));
-  showDispensingScreen();
-
-  closeDoor();
-  moveToSlot(targetSlot);
-  openDoor();
-
-  Serial.println(F("Please take medicine..."));
-  bool taken = waitForHandToTakePill(60000);
-  closeDoor();
-
-  Serial.println(taken ? F("DOSE_CONFIRMED") : F("DOSE_NOT_TAKEN"));
-}
+   Serial.println(F("DISPENSE_START"));
+    showDispensingScreen();
+     // 1) Safety: close door before tray movement
+      closeDoor();
+      // 2) Move tray to required medicine slot
+       moveToSlot(targetSlot);
+        // 3) Open door only to drop the medicine
+         openDoor(); 
+         // 4) Wait short time for pill to fall
+          delay(1200);
+           // 5) Close door immediately after pill drops
+           closeDoor(); 
+           // 6) Now wait for patient hand/take detection 
+           Serial.println(F("Please take medicine...")); 
+           bool taken = waitForHandToTakePill(60000); 
+           Serial.println(taken ? F("DOSE_CONFIRMED") : F("DOSE_NOT_TAKEN")); }
 
 void executeMoveOnly(int targetSlot) {
   Serial.println(F("MOVE_ONLY"));
@@ -847,6 +1093,65 @@ void handleSerialCommand(char *cmd) {
     Serial.println(scheduleCount);
     return;
   }
+
+  // ============================
+  // LCD UI serial commands
+  // These are mainly for Raspberry Pi to control LCD during refill/QR/SOS.
+  // They can also be tested from Serial Monitor.
+  // ============================
+  if (strcmp(cmd, "LCD_IDLE") == 0) { releaseLCDHold(); updateIdleLCD(); return; }
+  if (strcmp(cmd, "LCD_READY") == 0) { lcdSystemReadyScreen(); holdLCD(5000); return; }
+  if (strcmp(cmd, "LCD_PI_OFFLINE") == 0) { lcdPiOfflineScreen(); holdLCD(8000); return; }
+  if (strcmp(cmd, "LCD_REFILL_START") == 0) { lcdRefillStartScreen(); holdLCD(5000); return; }
+  if (strcmp(cmd, "LCD_WAIT_RFID") == 0) { lcdWaitRFIDScreen(); holdLCDLong(); return; }
+  if (strcmp(cmd, "LCD_RFID_OK") == 0) { lcdRFIDOkScreen(); holdLCD(5000); return; }
+  if (strcmp(cmd, "LCD_RFID_DENIED") == 0) { lcdRFIDDeniedScreen(); holdLCD(5000); return; }
+  if (strcmp(cmd, "LCD_QR_SCAN") == 0) { lcdQRScanningScreen(); holdLCDLong(); return; }
+  if (strcmp(cmd, "LCD_QR_OK") == 0) { lcdQROkScreen(); holdLCD(5000); return; }
+  if (strcmp(cmd, "LCD_QR_WRONG") == 0) { lcdQRWrongScreen(); holdLCD(5000); return; }
+  if (strcmp(cmd, "LCD_QR_REQUIRED") == 0) { lcdQRRequiredScreen(); holdLCD(5000); return; }
+  if (strcmp(cmd, "LCD_SLOT_LOADED") == 0) { lcdSlotLoadedScreen(); holdLCD(4000); return; }
+  if (strcmp(cmd, "LCD_SLOT_SKIPPED") == 0) { lcdSlotSkippedScreen(); holdLCD(4000); return; }
+  if (strcmp(cmd, "LCD_REFILL_FINISH") == 0) { lcdRefillFinishScreen(); holdLCD(6000); return; }
+  if (strcmp(cmd, "LCD_REFILL_DONE") == 0) { lcdRefillDoneScreen(); holdLCD(6000); return; }
+  if (strcmp(cmd, "LCD_SOS") == 0) { lcdSOSAlertScreen(); holdLCDLong(); return; }
+  if (strcmp(cmd, "LCD_SOS_SENT") == 0) { lcdSOSSentScreen(); holdLCD(8000); return; }
+  if (strcmp(cmd, "LCD_CAMERA_ERROR") == 0) { lcdCameraErrorScreen(); holdLCD(6000); return; }
+  if (strcmp(cmd, "LCD_HOME_ERROR") == 0) { lcdHomeErrorScreen(); holdLCDLong(); return; }
+
+  if (strncmp(cmd, "LCD_MOVE_SLOT ", 14) == 0) {
+    int slot;
+    if (sscanf(cmd, "LCD_MOVE_SLOT %d", &slot) == 1) {
+      lcdMovingToFillSlot(slot);
+      holdLCDLong();
+    } else {
+      lcdCameraErrorScreen();
+      holdLCD(5000);
+    }
+    return;
+  }
+
+if (strncmp(cmd, "LCD_FILL_SLOT ", 14) == 0) {
+  int slot;
+  char medicineName[17];
+
+  medicineName[0] = '\0';
+
+  if (sscanf(cmd, "LCD_FILL_SLOT %d %16[^\n]", &slot, medicineName) >= 1) {
+    if (medicineName[0] != '\0') {
+      lcdFillSlotMedicineScreen(slot, medicineName);
+    } else {
+      lcdFillSlotScreen(slot);
+    }
+
+    holdLCDLong();
+  } else {
+    lcdCameraErrorScreen();
+    holdLCD(5000);
+  }
+
+  return;
+}
 
   if (strcmp(cmd, "HEALTH_MENU") == 0 || strcmp(cmd, "HEALTH_CHECK") == 0) {
     showHealthMenu(); return;
@@ -980,7 +1285,7 @@ void setup() {
   delay(500);
 
   // فعّلي هذا السطر مرة واحدة فقط لضبط الوقت، ثم أعيديه تعليقاً
-  //  rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+   // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
 
   loadSchedulesFromEEPROM();
   goToHome();
@@ -1004,6 +1309,8 @@ void loop() {
     if (currentMode != MODE_BACKUP) {
       currentMode = MODE_BACKUP;
       Serial.println(F("MODE BACKUP"));
+      lcdPiOfflineScreen();
+      holdLCD(8000);
     }
   }
 
