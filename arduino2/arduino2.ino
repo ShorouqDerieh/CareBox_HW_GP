@@ -1,39 +1,24 @@
 #include <SPI.h>
 #include <MFRC522.h>
-
-// ============================
 // RFID + Lock + SOS Pins
-// ============================
 #define RFID_SS_PIN 10
 #define RFID_RST_PIN 9
 
 #define LOCK_PIN 5
 #define SOS_BUTTON_PIN 2
-
-// ============================
 // RGB Relay Pins
-// ============================
 #define RED_RELAY_PIN   6   // relay المنفصلة
 #define GREEN_RELAY_PIN 3   // K1
 #define BLUE_RELAY_PIN  4   // K2
-
-// Active LOW relays
 #define RELAY_ON  LOW
 #define RELAY_OFF HIGH
 
 MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
-
-// غيّري هذه القيم حسب UID كرتك
 byte allowedUID[4] = {0x24, 0x57, 0x94, 0x72};
-
 bool lidUnlocked = false;
-
 char serialBuffer[40];
 byte serialIndex = 0;
-
-// ============================
 // RGB / Light Functions
-// ============================
 void setOff() {
   digitalWrite(RED_RELAY_PIN, RELAY_OFF);
   digitalWrite(GREEN_RELAY_PIN, RELAY_OFF);
@@ -90,10 +75,7 @@ void blinkRed(int times, int delayMs) {
     delay(delayMs);
   }
 }
-
-// ============================
 // Lock Functions
-// ============================
 void unlockLid() {
   Serial.println("TRY_UNLOCK_PIN_HIGH");
 
@@ -105,7 +87,7 @@ void unlockLid() {
 
   lidUnlocked = true;
 
-  setBlue(); // Refill/access mode
+  setBlue();
   Serial.println("LID_UNLOCKED");
 }
 
@@ -113,13 +95,11 @@ void lockLid() {
   digitalWrite(LOCK_PIN, LOW);
   lidUnlocked = false;
 
-  setGreen(); // secure/ready
+  setGreen(); 
   Serial.println("LID_LOCKED");
 }
 
-// ============================
 // RFID Functions
-// ============================
 bool isAllowedUID(byte *uid, byte size) {
   if (size != 4) return false;
 
@@ -167,9 +147,7 @@ void checkRFID() {
   delay(1000);
 }
 
-// ============================
 // SOS Function
-// ============================
 void checkSOS() {
   static bool sosPressedBefore = false;
   static unsigned long lastSosTime = 0;
@@ -184,8 +162,6 @@ void checkSOS() {
 
       if (now - lastSosTime > 5000) {
         Serial.println("SOS");
-
-        // SOS visual alert
         blinkRed(6, 150);
         setRed();
 
@@ -200,10 +176,7 @@ void checkSOS() {
     sosPressedBefore = false;
   }
 }
-
-// ============================
 // Serial Commands
-// ============================
 void handleCommand(char *cmd) {
   // Lock commands
   if (strcmp(cmd, "LOCK") == 0) {
@@ -226,8 +199,6 @@ void handleCommand(char *cmd) {
     Serial.println("SECURITY_PONG");
     return;
   }
-
-  // LED commands
   if (strcmp(cmd, "LED_OFF") == 0) {
     setOff();
     Serial.println("LED_OFF_OK");
@@ -310,10 +281,6 @@ void readSerialLines() {
     }
   }
 }
-
-// ============================
-// Setup
-// ============================
 void setup() {
   Serial.begin(9600);
 
@@ -324,8 +291,6 @@ void setup() {
   pinMode(RED_RELAY_PIN, OUTPUT);
   pinMode(GREEN_RELAY_PIN, OUTPUT);
   pinMode(BLUE_RELAY_PIN, OUTPUT);
-
-  // مهم جدًا لأن الريلاي Active LOW
   setOff();
 
   lockLid();
@@ -335,13 +300,9 @@ void setup() {
 
   delay(500);
 
-  setGreen(); // system ready
+  setGreen();
   Serial.println("SECURITY_READY");
 }
-
-// ============================
-// Loop
-// ============================
 void loop() {
   readSerialLines();
   checkRFID();

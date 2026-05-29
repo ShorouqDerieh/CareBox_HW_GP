@@ -9,10 +9,7 @@
 #include <DallasTemperature.h>
 #include <string.h>
 #include <stdio.h>
-
-// ============================
 // Pins
-// ============================
 #define STEP_PIN 3
 #define DIR_PIN  4
 #define HOME_IR_PIN 7
@@ -25,10 +22,7 @@
 #define STEPS_PER_SLOT 160
 #define MAX_SLOTS 20
 #define SERVO_PIN 9
-
-// ============================
 // Health Sensors
-// ============================
 #define TEMP_PIN 2
 #define PULSE_PIN A1
 
@@ -42,25 +36,16 @@ Servo doorServo;
 
 #define DOOR_CLOSED 140
 #define DOOR_OPEN    40
-
-// ============================
 // Modes
-// ============================
 #define MODE_PRIMARY 1
 #define MODE_BACKUP  2
 
 RTC_DS3231 rtc;
 hd44780_I2Cexp lcd(0x27);
-
-// ============================
 // Health objects
-// ============================
 OneWire oneWire(TEMP_PIN);
 DallasTemperature tempSensor(&oneWire);
-
-// ============================
 // Keypad
-// ============================
 #define KEYPAD_ADDR 0x20
 
 I2CKeyPad keyPad(KEYPAD_ADDR);
@@ -69,17 +54,11 @@ bool keypadReady = false;
 unsigned long lastKeypadTime = 0;
 
 char keypadMap[17] = "147*2580369#ABCD";
-
-// ============================
 // Health Menu State
-// ============================
 bool healthMenuActive = false;
 unsigned long healthMenuStart = 0;
 const unsigned long HEALTH_MENU_TIMEOUT = 15000UL;
-
-// ============================
 // State
-// ============================
 int currentMode = MODE_PRIMARY;
 unsigned long lastHeartbeat = 0;
 const unsigned long HEARTBEAT_TIMEOUT = 30000;
@@ -106,16 +85,8 @@ unsigned long lcdHoldUntil = 0;
 // Serial buffer
 char serialBuffer[64];
 byte serialIndex = 0;
-
-// ============================
-// Shared LCD line buffer
-// (reused everywhere instead of multiple local arrays)
-// ============================
 char lcdBuf[17];
-
-// ============================
 // Function prototypes
-// ============================
 void closeDoor();
 void openDoor();
 void handleSerialCommand(char *cmd);
@@ -164,12 +135,7 @@ void lcdSOSAlertScreen();
 void lcdSOSSentScreen();
 void lcdCameraErrorScreen();
 void lcdHomeErrorScreen();
-
-// ============================
 // LCD helpers
-// ============================
-
-// Print a RAM string padded to 16 chars
 void printLineChar(uint8_t row, const char *text) {
   lcd.setCursor(0, row);
   byte len = strlen(text);
@@ -177,8 +143,6 @@ void printLineChar(uint8_t row, const char *text) {
     lcd.print(i < len ? text[i] : ' ');
   }
 }
-
-// Print a Flash string padded to 16 chars
 void printLineF(uint8_t row, const __FlashStringHelper *fsh) {
   lcd.setCursor(0, row);
   PGM_P p = reinterpret_cast<PGM_P>(fsh);
@@ -191,8 +155,6 @@ void printLineF(uint8_t row, const __FlashStringHelper *fsh) {
   }
   while (i++ < 16) lcd.print(' ');
 }
-
-// 4-line screen from RAM strings
 void showScreen(const char *l1, const char *l2,
                 const char *l3, const char *l4) {
   printLineChar(0, l1);
@@ -200,8 +162,6 @@ void showScreen(const char *l1, const char *l2,
   printLineChar(2, l3);
   printLineChar(3, l4);
 }
-
-// 4-line screen from Flash strings  ← saves ~80+ bytes RAM vs showScreen
 void showScreenF(const __FlashStringHelper *l1,
                  const __FlashStringHelper *l2,
                  const __FlashStringHelper *l3,
@@ -211,8 +171,6 @@ void showScreenF(const __FlashStringHelper *l1,
   printLineF(2, l3);
   printLineF(3, l4);
 }
-
-// Mixed: line1 from RAM (dynamic), lines 2-4 from Flash
 void showScreenMixed(const char *l1,
                      const __FlashStringHelper *l2,
                      const __FlashStringHelper *l3,
@@ -222,10 +180,7 @@ void showScreenMixed(const char *l1,
   printLineF(2, l3);
   printLineF(3, l4);
 }
-
-// ============================
 // Static screens (all Flash)
-// ============================
 void showStartupScreen() {
   showScreenF(F("CARE BOX+ Sys"),
               F("Initializing..."),
@@ -246,12 +201,8 @@ void showRtcErrorScreen() {
               F("Check wiring"),
               F("Restart device"));
 }
-
-
-// ============================
 // LCD hold control
 // Keeps temporary state screens visible before returning to Idle.
-// ============================
 void holdLCD(unsigned long durationMs) {
   lcdHoldUntil = millis() + durationMs;
 }
@@ -264,10 +215,7 @@ void releaseLCDHold() {
   lcdHoldUntil = 0;
   lastLcdUpdate = 0;
 }
-
-// ============================
 // Dynamic screens (line1 = time from lcdBuf)
-// ============================
 static void fillTimeLine() {
   DateTime now = rtc.now();
   snprintf(lcdBuf, sizeof(lcdBuf), "Time: %02d:%02d",
@@ -305,12 +253,8 @@ void showMissedScreen() {
                   F("No hand detect"),
                   F("Check patient"));
 }
-
-
-// ============================
 // CareBox+ LCD UI state screens
 // These screens can be called locally or by Raspberry Pi serial commands.
-// ============================
 void lcdSystemReadyScreen() {
   showScreenF(F("CARE BOX+"),
               F("System Ready"),
@@ -461,10 +405,7 @@ void lcdHomeErrorScreen() {
               F("Check sensor"),
               F("Restart"));
 }
-
-// ============================
 // Health functions
-// ============================
 void initHealthSensors() {
   pinMode(PULSE_PIN, INPUT);
   tempSensor.begin();
@@ -565,8 +506,6 @@ if (count > 0) {
   } else {
     status = "NORMAL";
   }
-
-  // Line1: temperature value  (reuse lcdBuf)
   if (tempC == DEVICE_DISCONNECTED_C || tempC < -100) {
     snprintf(lcdBuf, sizeof(lcdBuf), "Temp: ERROR");
   } else {
@@ -574,13 +513,8 @@ if (count > 0) {
     dtostrf(tempC, 4, 1, tmp);
     snprintf(lcdBuf, sizeof(lcdBuf), "Temp:%s C", tmp);
   }
-
-  // Line2: status  (second shared buffer — use Serial buffer gap trick:
-  //  we just print directly, no extra array needed)
   printLineF(0, F("Temp Result"));
   printLineChar(1, lcdBuf);
-
-  // Build status line in lcdBuf now (line1 already sent)
   snprintf(lcdBuf, sizeof(lcdBuf), "Status:%s", status);
   printLineChar(2, lcdBuf);
   printLineF(3, F("CareBox+"));
@@ -604,8 +538,6 @@ void measureHeartRateOnly() {
               F("Hold still"),
               F("15 seconds"));
   delay(1000);
-
-  // --- Calibration ---
   unsigned long calibrationStart = millis();
   int calMin = 1023, calMax = 0;
   long calSum = 0;
@@ -629,8 +561,6 @@ void measureHeartRateOnly() {
               F("Measuring BPM"),
               F("Keep still"),
               F("Please wait"));
-
-  // --- Measurement ---
   unsigned long start = millis();
   unsigned long lastBeatTime = 0;
   long intervalSum = 0;
@@ -664,8 +594,6 @@ void measureHeartRateOnly() {
 
     delay(10);
   }
-
-  // --- Result ---
   int bpm = 0;
   const char *status = "WEAK_SIGNAL";
 
@@ -679,7 +607,7 @@ void measureHeartRateOnly() {
     }
   }
 
-  // Display result — reuse lcdBuf for each line sequentially
+  // Display result
   printLineF(0, F("Heart Result"));
 
   if (bpm > 0) {
@@ -707,10 +635,7 @@ if (bpm > 0) {
 
   delay(10000);
 }
-
-// ============================
 // Keypad functions
-// ============================
 void initKeypad() {
   if (keyPad.begin()) {
     keypadReady = true;
@@ -751,10 +676,7 @@ void checkKeypad() {
     while (keyPad.getKey() < 16) delay(20);
   }
 }
-
-// ============================
 // EEPROM
-// ============================
 void saveSchedulesToEEPROM() {
   EEPROM.update(EEPROM_MAGIC_ADDR, EEPROM_MAGIC);
   EEPROM.update(EEPROM_COUNT_ADDR, (byte)scheduleCount);
@@ -787,10 +709,7 @@ void loadSchedulesFromEEPROM() {
     scheduleSlots[i]   = EEPROM.read(EEPROM_DATA_ADDR + i * 3 + 2);
   }
 }
-
-// ============================
 // Find next dose
-// ============================
 bool findNextDose(int &nextHour, int &nextMinute) {
   if (scheduleCount == 0) {
     nextHour = nextMinute = -1;
@@ -830,30 +749,20 @@ bool findNextDose(int &nextHour, int &nextMinute) {
   nextMinute = scheduleMinutes[bestIndex];
   return true;
 }
-
-// ============================
-// Idle LCD  — only ONE buffer (lcdBuf) used at a time
-// ============================
 void updateIdleLCD() {
   if (healthMenuActive) return;
 
-  // لا ترجعي لشاشة الـ idle إذا في شاشة حالة معروضة
   if (millis() < lcdHoldUntil) return;
 
   if (millis() - lastLcdUpdate < 1000) return;
   lastLcdUpdate = millis();
 
   DateTime now = rtc.now();
-
-  // Line 0: time
   snprintf(lcdBuf, sizeof(lcdBuf), "Time: %02d:%02d",
            now.hour(), now.minute());
   printLineChar(0, lcdBuf);
-
-  // Line 1: mode
   printLineF(1, currentMode == MODE_PRIMARY ? F("Mode: PRIMARY") : F("Mode: BACKUP"));
 
-  // Line 2: next dose
   int nh = -1, nm = -1;
   if (findNextDose(nh, nm)) {
     snprintf(lcdBuf, sizeof(lcdBuf), "Next: %02d:%02d", nh, nm);
@@ -861,14 +770,9 @@ void updateIdleLCD() {
     snprintf(lcdBuf, sizeof(lcdBuf), "Next: --:--");
   }
   printLineChar(2, lcdBuf);
-
-  // Line 3: status
 printLineF(3, F("Waiting dose"));
 }
-
-// ============================
 // Door control
-// ============================
 void closeDoor() {
   doorServo.write(DOOR_CLOSED);
   Serial.println(F("DOOR_CLOSED"));
@@ -880,10 +784,7 @@ void openDoor() {
   Serial.println(F("DOOR_OPEN"));
   delay(400);
 }
-
-// ============================
 // Homing
-// ============================
 void goToHome() {
   closeDoor();
   Serial.println(F("HOMING_START"));
@@ -902,10 +803,7 @@ void goToHome() {
   currentSlot = 0;
   Serial.println(F("HOMED"));
 }
-
-// ============================
 // Movement
-// ============================
 void moveOneSlot() {
   digitalWrite(DIR_PIN, FORWARD);
   delay(50);
@@ -932,10 +830,7 @@ void moveToSlot(int targetSlot) {
   for (int i = 0; i < diff; i++) moveOneSlot();
   currentSlot = targetSlot;
 }
-
-// ============================
 // Hand detection
-// ============================
 bool isHandDetected() {
   return digitalRead(TAKE_IR_PIN) == LOW;
 }
@@ -962,10 +857,7 @@ bool waitForHandToTakePill(unsigned long timeout = 60000) {
   delay(2000);
   return false;
 }
-
-// ============================
 // Schedule functions
-// ============================
 void addSchedule(int h, int m, int s) {
   if (scheduleCount < MAX_SLOTS) {
     scheduleHours[scheduleCount]   = (byte)h;
@@ -1007,24 +899,15 @@ void listSchedules() {
     Serial.println(scheduleSlots[i]);
   }
 }
-
-// ============================
 // Dose cycle
-// ============================
 void executeDoseCycle(int targetSlot) {
    Serial.println(F("DISPENSE_START"));
     showDispensingScreen();
-     // 1) Safety: close door before tray movement
       closeDoor();
-      // 2) Move tray to required medicine slot
        moveToSlot(targetSlot);
-        // 3) Open door only to drop the medicine
          openDoor(); 
-         // 4) Wait short time for pill to fall
           delay(1200);
-           // 5) Close door immediately after pill drops
            closeDoor(); 
-           // 6) Now wait for patient hand/take detection 
            Serial.println(F("Please take medicine...")); 
            bool taken = waitForHandToTakePill(60000); 
            Serial.println(taken ? F("DOSE_CONFIRMED") : F("DOSE_NOT_TAKEN")); }
@@ -1035,10 +918,7 @@ void executeMoveOnly(int targetSlot) {
   moveToSlot(targetSlot);
   Serial.println(F("ARRIVED"));
 }
-
-// ============================
 // Backup mode RTC check
-// ============================
 void runBackupScheduleCheck() {
   DateTime now = rtc.now();
   int h = now.hour(), m = now.minute();
@@ -1053,10 +933,7 @@ void runBackupScheduleCheck() {
     }
   }
 }
-
-// ============================
 // Trim serial command
-// ============================
 void trimCommand(char *cmd) {
   char *start = cmd;
   while (*start == ' ' || *start == '\t') start++;
@@ -1067,10 +944,7 @@ void trimCommand(char *cmd) {
     cmd[--len] = '\0';
   }
 }
-
-// ============================
 // Serial command parser
-// ============================
 void handleSerialCommand(char *cmd) {
   trimCommand(cmd);
 
@@ -1093,12 +967,7 @@ void handleSerialCommand(char *cmd) {
     Serial.println(scheduleCount);
     return;
   }
-
-  // ============================
   // LCD UI serial commands
-  // These are mainly for Raspberry Pi to control LCD during refill/QR/SOS.
-  // They can also be tested from Serial Monitor.
-  // ============================
   if (strcmp(cmd, "LCD_IDLE") == 0) { releaseLCDHold(); updateIdleLCD(); return; }
   if (strcmp(cmd, "LCD_READY") == 0) { lcdSystemReadyScreen(); holdLCD(5000); return; }
   if (strcmp(cmd, "LCD_PI_OFFLINE") == 0) { lcdPiOfflineScreen(); holdLCD(8000); return; }
@@ -1218,10 +1087,7 @@ if (strncmp(cmd, "LCD_FILL_SLOT ", 14) == 0) {
   Serial.print(F("UNKNOWN "));
   Serial.println(cmd);
 }
-
-// ============================
 // Serial line reader
-// ============================
 void readSerialLines() {
   while (Serial.available() > 0) {
     char c = Serial.read();
@@ -1241,10 +1107,6 @@ void readSerialLines() {
     }
   }
 }
-
-// ============================
-// Setup
-// ============================
 void setup() {
   pinMode(ENABLE_PIN, OUTPUT);
   digitalWrite(ENABLE_PIN, LOW);
@@ -1283,8 +1145,6 @@ void setup() {
   delay(300);
   doorServo.write(DOOR_CLOSED);
   delay(500);
-
-  // فعّلي هذا السطر مرة واحدة فقط لضبط الوقت، ثم أعيديه تعليقاً
    // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
 
   loadSchedulesFromEEPROM();
@@ -1292,10 +1152,6 @@ void setup() {
   lastHeartbeat = millis();
   Serial.println(F("READY"));
 }
-
-// ============================
-// Loop
-// ============================
 void loop() {
   readSerialLines();
   checkKeypad();
