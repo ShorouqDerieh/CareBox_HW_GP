@@ -2,8 +2,8 @@ import serial
 import time
 import threading
 from sos_manager import make_sos_call
-
-SECURITY_PORT = "/dev/ttyACM1"
+from push_manager import send_push
+SECURITY_PORT = "/dev/carebox_security"
 BAUD_RATE = 9600
 
 
@@ -13,10 +13,12 @@ class SecurityManager:
         self.lock = threading.Lock()
         self.running = False
         self.last_status = "SECURITY_INIT"
+        self.lid_lock_status = "locked"
         self.history = []
 
         self.rfid_ok_callback = None
         self.rfid_denied_callback = None
+        self.sos_callback = None
 
     def connect(self):
         self.ser = serial.Serial(SECURITY_PORT, BAUD_RATE, timeout=1)
@@ -26,7 +28,7 @@ class SecurityManager:
         threading.Thread(target=self.listen_loop, daemon=True).start()
 
         print("Security connected on", SECURITY_PORT)
-
+        self.status()
     def send(self, cmd):
         with self.lock:
             print(">>> SECURITY SEND:", cmd)
@@ -38,6 +40,7 @@ class SecurityManager:
             try:
                 if self.ser and self.ser.in_waiting > 0:
                     line = self.ser.readline().decode(errors="ignore").strip()
+
                     if line:
                         print("Security:", line)
                         self.last_status = line
@@ -58,18 +61,40 @@ class SecurityManager:
         elif msg == "RFID_DENIED":
             if self.rfid_denied_callback:
                 self.rfid_denied_callback()
+
             self.led_error()
 
         elif msg == "SOS":
             print(">>> SOS received from Arduino")
+
             self.led_sos()
+
+            if self.sos_callback:
+                self.sos_callback()
+
             make_sos_call()
 
         elif msg == "LID_UNLOCKED":
+            self.lid_lock_status = "unlocked"
             self.led_refill()
 
         elif msg == "LID_LOCKED":
+            self.lid_lock_status = "locked"
             self.led_ready()
+
+        elif msg == "AUTO_LOCK":
+            self.lid_lock_status = "locked"
+
+        elif msg.startswith("SECURITY_STATUS"):
+            if "UNLOCKED" in msg:
+                self.lid_lock_status = "unlocked"
+            elif "LOCKED" in msg:
+                self.lid_lock_status = "locked"
+
+    # ============================
+    # Lock commands
+    # ============================
+
     def lock_lid(self):
         self.send("LOCK")
 
@@ -82,6 +107,7 @@ class SecurityManager:
     # ============================
     # RGB LED commands
     # ============================
+
     def led_ready(self):
         self.send("LED_GREEN")
 
