@@ -12,13 +12,26 @@
 #define BLUE_RELAY_PIN  4   // K2
 #define RELAY_ON  LOW
 #define RELAY_OFF HIGH
-
+unsigned long ledHoldUntil = 0;
+bool ledTemporaryMode = false;
 MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
 byte allowedUID[4] = {0x24, 0x57, 0x94, 0x72};
 bool lidUnlocked = false;
 char serialBuffer[40];
 byte serialIndex = 0;
 // RGB / Light Functions
+void setNormalLedState() {
+  if (lidUnlocked) {
+    setBlue();  
+  } else {
+    setGreen();  
+  }
+}
+void setTemporaryRed(unsigned long durationMs) {
+  setRed();
+  ledTemporaryMode = true;
+  ledHoldUntil = millis() + durationMs;
+}
 void setOff() {
   digitalWrite(RED_RELAY_PIN, RELAY_OFF);
   digitalWrite(GREEN_RELAY_PIN, RELAY_OFF);
@@ -161,12 +174,12 @@ void checkSOS() {
       unsigned long now = millis();
 
       if (now - lastSosTime > 5000) {
-        Serial.println("SOS");
-        blinkRed(6, 150);
-        setRed();
+  Serial.println("SOS");
+  blinkRed(6, 150);
+  setTemporaryRed(30000); 
 
-        lastSosTime = now;
-      }
+  lastSosTime = now;
+}
 
       sosPressedBefore = true;
     }
@@ -247,13 +260,12 @@ void handleCommand(char *cmd) {
     return;
   }
 
-  if (strcmp(cmd, "LED_SOS") == 0) {
-    blinkRed(6, 150);
-    setRed();
-    Serial.println("LED_SOS_OK");
-    return;
-  }
-
+if (strcmp(cmd, "LED_SOS") == 0) {
+  blinkRed(6, 150);
+  setTemporaryRed(30000);
+  Serial.println("LED_SOS_OK");
+  return;
+}
   Serial.print("SECURITY_UNKNOWN ");
   Serial.println(cmd);
 }
@@ -279,6 +291,12 @@ void readSerialLines() {
         Serial.println("SECURITY_ERROR_CMD_TOO_LONG");
       }
     }
+  }
+}
+void updateLedState() {
+  if (ledTemporaryMode && millis() > ledHoldUntil) {
+    ledTemporaryMode = false;
+    setNormalLedState();
   }
 }
 void setup() {
@@ -307,4 +325,5 @@ void loop() {
   readSerialLines();
   checkRFID();
   checkSOS();
+  updateLedState();
 }
