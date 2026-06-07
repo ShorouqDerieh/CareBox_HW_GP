@@ -945,6 +945,11 @@ void listSchedules() {
 }
 // Dose cycle
 void executeDoseCycle(int targetSlot) {
+  if (doseInProgress) {
+    Serial.println(F("DOSE_ALREADY_IN_PROGRESS"));
+    return;
+  }
+
   doseInProgress = true;
 
   Serial.println(F("DISPENSE_START"));
