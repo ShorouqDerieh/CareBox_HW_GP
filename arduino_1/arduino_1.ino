@@ -9,6 +9,7 @@
 #include <DallasTemperature.h>
 #include <string.h>
 #include <stdio.h>
+#include <avr/pgmspace.h>
 // Pins
 #define STEP_PIN 3
 #define DIR_PIN  4
@@ -19,7 +20,8 @@
 #define BACKWARD HIGH
 #define FORWARD  LOW
 
-#define STEPS_PER_SLOT 172
+#define STEPS_PER_SLOT 165
+#define HOMING_OFFSET_STEPS 4
 #define MAX_SLOTS 20
 #define SERVO_PIN 9
 // Health Sensors
@@ -47,29 +49,53 @@ OneWire oneWire(TEMP_PIN);
 DallasTemperature tempSensor(&oneWire);
 // Keypad
 #define KEYPAD_ADDR 0x20
+#include <avr/pgmspace.h>
 
+#define STEPS_PER_SLOT 165
+#define HOMING_OFFSET_STEPS 4
+#define MAX_SLOTS 20
+
+const int8_t slotCorrection[MAX_SLOTS] PROGMEM = {
+  0,   // slot 0
+  57,  // slot 1
+  57,  // slot 2
+  54,   // slot 3
+  54,   // slot 4
+  54,   // slot 5
+  54,   // slot 6
+  54,   // slot 7
+  45,   // slot 8
+  42,   // slot 9
+  30,   // slot 10
+  30,   // slot 11
+  30,   // slot 12
+  28,   // slot 13
+  23,   // slot 14
+  23,   // slot 15
+  1,   // slot 16
+  0,   // slot 17
+  0,   // slot 18
+  0    // slot 19
+};
 I2CKeyPad keyPad(KEYPAD_ADDR);
 
 bool keypadReady = false;
 unsigned long lastKeypadTime = 0;
 
-char keypadMap[17] = "147*2580369#ABCD";
+const char keypadMap[17] PROGMEM = "147*2580369#ABCD";
 // Health Menu State
 bool healthMenuActive = false;
 unsigned long healthMenuStart = 0;
-const unsigned long HEALTH_MENU_TIMEOUT = 15000UL;
+#define HEALTH_MENU_TIMEOUT 15000UL
 // State
 int currentMode = MODE_PRIMARY;
 unsigned long lastHeartbeat = 0;
-const unsigned long HEARTBEAT_TIMEOUT = 120000;
+#define HEARTBEAT_TIMEOUT 30000UL
 
-int stepDelay =2000 ;
+int stepDelay =1800 ;
 int currentSlot = 0;
 int lastMoveHour = -1;
 int lastMoveMinute = -1;
-int lastMoveDay = -1;
-int lastMoveMonth = -1;
-int lastMoveYear = -1;
 
 byte scheduleHours[MAX_SLOTS];
 byte scheduleMinutes[MAX_SLOTS];
@@ -77,29 +103,28 @@ byte scheduleSlots[MAX_SLOTS];
 int scheduleCount = 0;
 
 // EEPROM layout
-const int  EEPROM_MAGIC_ADDR = 0;
-const byte EEPROM_MAGIC      = 0x42;
-const int  EEPROM_COUNT_ADDR = 1;
-const int  EEPROM_DATA_ADDR  = 2;
-bool doseInProgress = false;
-unsigned long suppressBackupUntil = 0;
-const unsigned long BACKUP_SUPPRESS_AFTER_PRIMARY_MS = 120000UL;
+#define EEPROM_MAGIC_ADDR 0
+#define EEPROM_MAGIC      0x42
+#define EEPROM_COUNT_ADDR 1
+#define EEPROM_DATA_ADDR  2
+
 // LCD state
 unsigned long lastLcdUpdate = 0;
 unsigned long lcdHoldUntil = 0;
 // Serial buffer
-char serialBuffer[40];
+char serialBuffer[48];
 byte serialIndex = 0;
 char lcdBuf[17];
 // Function prototypes
-void moveDoorServo(int angle);
 void closeDoor();
 void openDoor();
 void handleSerialCommand(char *cmd);
 void readSerialLines();
 void updateIdleLCD();
 void goToHome();
-void moveOneSlot();
+void moveSteps(long steps, bool dir);
+void stepperOn();
+void stepperOff();
 void moveToSlot(int targetSlot);
 void executeDoseCycle(int targetSlot);
 void executeMoveOnly(int targetSlot);
@@ -698,7 +723,7 @@ void checkKeypad() {
   if (index < 16) {
     if (millis() - lastKeypadTime < 300) return;
 
-    handleKeypadKey(keypadMap[index]);
+    handleKeypadKey((char)pgm_read_byte(&keypadMap[index]));
     lastKeypadTime = millis();
 
     while (keyPad.getKey() < 16) delay(20);
@@ -801,15 +826,6 @@ void updateIdleLCD() {
 printLineF(3, F("Waiting dose"));
 }
 // Door control
-void moveDoorServo(int angle) {
-  doorServo.detach();
-  delay(200);
-  doorServo.attach(SERVO_PIN);
-  delay(300);
-  doorServo.write(angle);
-  delay(1000);
-}
-
 void closeDoor() {
   doorServo.write(DOOR_CLOSED);
   Serial.println(F("DOOR_CLOSED"));
@@ -821,8 +837,18 @@ void openDoor() {
   Serial.println(F("DOOR_OPEN"));
   delay(400);
 }
+
+void stepperOn() {
+  digitalWrite(ENABLE_PIN, LOW);   // A4988 enabled
+  delay(5);
+}
+
+void stepperOff() {
+  digitalWrite(ENABLE_PIN, HIGH);  // A4988 disabled: stops idle twitch/heat
+}
 // Homing
 void goToHome() {
+  stepperOn();
   closeDoor();
   Serial.println(F("HOMING_START"));
   showHomingScreen();
@@ -830,7 +856,28 @@ void goToHome() {
   digitalWrite(DIR_PIN, BACKWARD);
   delay(100);
 
+  unsigned long startTime = millis();
+
   while (digitalRead(HOME_IR_PIN) == LOW) {
+    if (millis() - startTime > 15000UL) {
+      Serial.println(F("HOMING_TIMEOUT"));
+      lcdHomeErrorScreen();
+      stepperOff();
+      return;
+    }
+
+    digitalWrite(STEP_PIN, HIGH);
+    delayMicroseconds(stepDelay + 300);
+    digitalWrite(STEP_PIN, LOW);
+    delayMicroseconds(stepDelay + 300);
+  }
+
+  // After the home mark is detected, move a few steps in the
+  // normal dispensing direction to remove backlash and align slot 0.
+  digitalWrite(DIR_PIN, FORWARD);
+  delay(50);
+
+  for (int i = 0; i < HOMING_OFFSET_STEPS; i++) {
     digitalWrite(STEP_PIN, HIGH);
     delayMicroseconds(stepDelay + 300);
     digitalWrite(STEP_PIN, LOW);
@@ -839,33 +886,68 @@ void goToHome() {
 
   currentSlot = 0;
   Serial.println(F("HOMED"));
+  stepperOff();
 }
 // Movement
-void moveOneSlot() {
-  digitalWrite(DIR_PIN, FORWARD);
-  delay(50);
+void moveSteps(long steps, bool dir) {
+  if (steps <= 0) return;
 
-  for (int i = 0; i < STEPS_PER_SLOT; i++) {
-   int d = stepDelay;
-  if (i < 50) {
-  d = stepDelay + (50 - i) * 15;
-}
+  stepperOn();
+
+  digitalWrite(DIR_PIN, dir);
+  delay(100);
+
+  for (long i = 0; i < steps; i++) {
+    int d = stepDelay;
+
+    // Soft start: prevents the heavy tray from skipping steps at launch.
+    if (i < 100) {
+      d = stepDelay + (100 - i) * 20;
+    }
+
+    // Soft stop: reduces overshoot/shaking near the target slot.
+    if (i > steps - 80) {
+      d = stepDelay + (i - (steps - 80)) * 15;
+    }
+
     digitalWrite(STEP_PIN, HIGH);
     delayMicroseconds(d);
     digitalWrite(STEP_PIN, LOW);
     delayMicroseconds(d);
   }
 
-  currentSlot = (currentSlot + 1) % MAX_SLOTS;
-  Serial.println(F("DONE"));
+  delay(300);
+  stepperOff();
 }
 
 void moveToSlot(int targetSlot) {
-  int diff = (targetSlot - currentSlot + MAX_SLOTS) % MAX_SLOTS;
-  Serial.print(F("Moving to slot "));
+  if (targetSlot < 0) targetSlot = 0;
+  if (targetSlot >= MAX_SLOTS) targetSlot = MAX_SLOTS - 1;
+
+  Serial.print(F("MOVE_TO "));
   Serial.println(targetSlot);
-  for (int i = 0; i < diff; i++) moveOneSlot();
+
+  // Always start from HOME, then move directly to the requested slot.
+  // This prevents cumulative error from slot-by-slot movement.
+  goToHome();
+
+int correction = pgm_read_byte(&slotCorrection[targetSlot]);
+
+long steps = (long)targetSlot * STEPS_PER_SLOT + correction;
+
+Serial.print(F("SLOT_CORRECTION "));
+Serial.println(correction);
+Serial.print(F("ABS_STEPS "));
+Serial.println(steps);
+  Serial.print(F("STEPS "));
+  Serial.println(steps);
+
+  moveSteps(steps, FORWARD);
+
   currentSlot = targetSlot;
+
+  Serial.print(F("ARRIVED_SLOT "));
+  Serial.println(currentSlot);
 }
 // Hand detection
 bool isHandDetected() {
@@ -883,7 +965,7 @@ while (millis() - start < timeout) {
   if (isHandDetected()) {
     delay(300);
     if (isHandDetected()) {
-     // Serial.println(F("TAKEN"));
+      Serial.println(F("TAKEN"));
       showTakenScreen();
       delay(2000);
       return true;
@@ -892,7 +974,7 @@ while (millis() - start < timeout) {
 
   delay(50);
 }
-  //Serial.println(F("MISSED"));
+  Serial.println(F("MISSED"));
   showMissedScreen();
   delay(2000);
   return false;
@@ -919,11 +1001,7 @@ void addSchedule(int h, int m, int s) {
 
 void clearSchedules() {
   scheduleCount = 0;
-  lastMoveHour = -1;
-  lastMoveMinute = -1;
-  lastMoveDay = -1;
-  lastMoveMonth = -1;
-  lastMoveYear = -1;
+  lastMoveHour = lastMoveMinute = -1;
   Serial.println(F("CLEARED"));
 }
 
@@ -945,23 +1023,15 @@ void listSchedules() {
 }
 // Dose cycle
 void executeDoseCycle(int targetSlot) {
-  if (doseInProgress) {
-    Serial.println(F("DOSE_ALREADY_IN_PROGRESS"));
-    return;
-  }
-
-  doseInProgress = true;
-
   Serial.println(F("DISPENSE_START"));
   showDispensingScreen();
 
   closeDoor();
 
+  // moveToSlot() now does HOME first, then moves directly from HOME to target.
   Serial.println(F("DOSE_HOMING_START"));
-  goToHome();
-  Serial.println(F("DOSE_HOMING_DONE"));
-
   moveToSlot(targetSlot);
+  Serial.println(F("DOSE_HOMING_DONE"));
 
   openDoor();
   delay(1200);
@@ -972,63 +1042,27 @@ void executeDoseCycle(int targetSlot) {
   bool taken = waitForHandToTakePill(60000);
 
   Serial.println(taken ? F("DOSE_CONFIRMED") : F("DOSE_NOT_TAKEN"));
-
-  doseInProgress = false;
 }
 
 void executeMoveOnly(int targetSlot) {
   Serial.println(F("MOVE_ONLY"));
   closeDoor();
-  goToHome();
   moveToSlot(targetSlot);
   Serial.println(F("ARRIVED"));
 }
 // Backup mode RTC check
 void runBackupScheduleCheck() {
- if (doseInProgress) {
-    return;
-  }
-
-  if (millis() < suppressBackupUntil) {
-    return;
-  }
-
-  if (currentMode != MODE_BACKUP) {
-    return;
-  }
   DateTime now = rtc.now();
-
-  int y = now.year();
-  int mo = now.month();
-  int d = now.day();
-  int h = now.hour();
-  int m = now.minute();
-
-  // Prevent backup mode from dispensing the same minute more than once.
-  // This also allows the same time to work again on the next day.
-  if (y == lastMoveYear &&
-      mo == lastMoveMonth &&
-      d == lastMoveDay &&
-      h == lastMoveHour &&
-      m == lastMoveMinute) {
-    return;
-  }
-
-  bool foundDose = false;
+  int h = now.hour(), m = now.minute();
 
   for (int i = 0; i < scheduleCount; i++) {
     if (h == scheduleHours[i] && m == scheduleMinutes[i]) {
-      foundDose = true;
-      executeDoseCycle(scheduleSlots[i]);
+      if (h != lastMoveHour || m != lastMoveMinute) {
+        executeDoseCycle(scheduleSlots[i]);
+        lastMoveHour   = h;
+        lastMoveMinute = m;
+      }
     }
-  }
-
-  if (foundDose) {
-    lastMoveYear = y;
-    lastMoveMonth = mo;
-    lastMoveDay = d;
-    lastMoveHour = h;
-    lastMoveMinute = m;
   }
 }
 // Trim serial command
@@ -1076,44 +1110,33 @@ void setRtcFromCommand(char *cmd) {
   if (!rtc.lostPower()) {
     DateTime currentTime = rtc.now();
 
-   /*  if (newTime.unixtime() + 300 < currentTime.unixtime()) {
+    if (newTime.unixtime() + 300 < currentTime.unixtime()) {
       Serial.println(F("ERROR_SET_TIME_OLDER_THAN_RTC"));
       return;
-    } */
+    }
   }
 
   rtc.adjust(newTime);
-
-  // Time changed, so reset backup duplicate guard.
-  lastMoveHour = -1;
-  lastMoveMinute = -1;
-  lastMoveDay = -1;
-  lastMoveMonth = -1;
-  lastMoveYear = -1;
-
   Serial.println(F("RTC_TIME_SET"));
   updateIdleLCD();
 }
 // Serial command parser
 void handleSerialCommand(char *cmd) {
   trimCommand(cmd);
-
-  if (strncmp(cmd, "SET_TIME ", 9) == 0) {
-    setRtcFromCommand(cmd);
-    return;
-  }
-
-if (strcmp(cmd, "PING") == 0) {
-  lastHeartbeat = millis();
-
-  if (currentMode != MODE_PRIMARY) {
-    currentMode = MODE_PRIMARY;
-    Serial.println(F("MODE PRIMARY"));
-  }
-
-  Serial.println(F("PONG"));
+ if (strncmp(cmd, "SET_TIME ", 9) == 0) {
+  setRtcFromCommand(cmd);
   return;
 }
+
+  if (strcmp(cmd, "PING") == 0) {
+    lastHeartbeat = millis();
+    if (currentMode != MODE_PRIMARY) {
+      currentMode = MODE_PRIMARY;
+      Serial.println(F("MODE PRIMARY"));
+    }
+    Serial.println(F("PONG"));
+    return;
+  }
 
   if (strcmp(cmd, "STATUS") == 0) {
     Serial.print(F("STATUS "));
@@ -1219,17 +1242,16 @@ if (strncmp(cmd, "LCD_FILL_SLOT ", 14) == 0) {
     return;
   }
 
-if (strncmp(cmd, "DISPENSE_SLOT ", 14) == 0) {
-  int slot = atoi(cmd + 14);
-
-  lastHeartbeat = millis();
-  currentMode = MODE_PRIMARY;
-
-  suppressBackupUntil = millis() + BACKUP_SUPPRESS_AFTER_PRIMARY_MS;
-
-  executeDoseCycle(slot);
-  return;
-}
+  if (strncmp(cmd, "DISPENSE_SLOT ", 14) == 0) {
+    int slot;
+    if (sscanf(cmd, "DISPENSE_SLOT %d", &slot) == 1 &&
+        slot >= 0 && slot < MAX_SLOTS) {
+      executeDoseCycle(slot);
+    } else {
+      Serial.println(F("ERROR: Invalid slot"));
+    }
+    return;
+  }
 
   if (strncmp(cmd, "MOVE_SLOT ", 10) == 0) {
     int slot;
@@ -1267,7 +1289,7 @@ void readSerialLines() {
 }
 void setup() {
   pinMode(ENABLE_PIN, OUTPUT);
-  digitalWrite(ENABLE_PIN, LOW);
+  digitalWrite(ENABLE_PIN, HIGH); // disabled until movement starts
   digitalWrite(STEP_PIN, LOW);
   digitalWrite(DIR_PIN, BACKWARD);
   pinMode(STEP_PIN, OUTPUT);
@@ -1297,19 +1319,18 @@ void setup() {
 
   initHealthSensors();
   initKeypad();
+doorServo.attach(SERVO_PIN);
+doorServo.write(DOOR_CLOSED);
+delay(500);
 
-  doorServo.attach(SERVO_PIN);
-  doorServo.write(DOOR_CLOSED);
-  delay(500);
-
-  if (rtc.lostPower()) {
+if (rtc.lostPower()) {
   Serial.println(F("RTC_LOST_POWER_DETECTED"));
   Serial.println(F("WAITING_RPI_TIME"));
 } else {
-    Serial.println(F("RTC_POWER_OK"));
-  }
+  Serial.println(F("RTC_POWER_OK"));
+}
 
-  loadSchedulesFromEEPROM();
+loadSchedulesFromEEPROM();
   goToHome();
   lastHeartbeat = millis();
   Serial.println(F("READY"));
